@@ -102,10 +102,11 @@ struct Order
     TQty      cum_qty_;   // Number of shares already filled
     Side      side_;      // Whether order is to buy or sell
     OrderType type_;      // The order type, limit or market
-
- // ... Add any additional members you want
-
 };
+
+// Assume that the order in which messages are delivered to users is guaranteed to be the same as their sending.
+// So, for example, there is no need to specify leaves quantity for partially filled market order (in Cancel)
+// as it can be determined from previously sent Fill orders.
 
 struct Fill
 {
@@ -131,9 +132,15 @@ struct Reject
 
 };
 
-class Cancel
+struct Cancel
 {
-    // Define this class
+    Order::TOrderId order_id_;
+
+    bool operator==(const Cancel& cancel) const
+    {
+        return order_id_ == cancel.order_id_;
+    }
+
 };
 
 struct OrderAck
@@ -170,8 +177,6 @@ struct Templates
 {
     TThisSide& This;
     TOtherSide& Other;
-    Order::TQty& ThisLiquidity;
-    Order::TQty& OtherLiquidity;
 };
 
 
@@ -188,9 +193,6 @@ class MatchingEngine
 
     TBids bids_;
     TAcks asks_;
-
-    Order::TQty bid_liquidity_ {};
-    Order::TQty ask_liquidity_ {};
 
     static const constexpr char* NotEnoughLiquidityMessage = "Not enough liquidity.";
 
@@ -213,12 +215,12 @@ public:
         if (order.side_ == Order::Side::Buy)
         {
             // Derermine the sides only once.
-            Templates<TBids, TAcks> temp{bids_, asks_, bid_liquidity_, ask_liquidity_};
+            Templates<TBids, TAcks> temp{bids_, asks_,};
             ProcessOrder(order, temp);
         }
         else if (order.side_ == Order::Side::Sell)
         {
-            Templates<TAcks, TBids> temp{asks_, bids_, ask_liquidity_, bid_liquidity_};
+            Templates<TAcks, TBids> temp{asks_, bids_,};
             ProcessOrder(order, temp);
         }
     }
@@ -233,7 +235,7 @@ private:
     template <typename T>
     void ProcessOrder(Order& order, T& templates)
     {
-        if (order.type_ == Order::OrderType::Market && order.quantity_ > templates.OtherLiquidity)
+        if (order.type_ == Order::OrderType::Market && templates.Other.empty())
         {
             Reject r{order.order_id_, NotEnoughLiquidityMessage};
             message_hub_->SendReject(r);
@@ -244,11 +246,18 @@ private:
 
         if (order.cum_qty_ != order.quantity_)
         {
-            templates.This.emplace(order.price_, order);
-            templates.ThisLiquidity += order.quantity_;
+            if (order.type_ == Order::OrderType::Limit)
+            {
+                templates.This.emplace(order.price_, order);
 
-            OrderAck ack{order.order_id_};
-            message_hub_->SendOrderAck(ack);
+                OrderAck ack{order.order_id_};
+                message_hub_->SendOrderAck(ack);
+            }
+            else if (order.type_ == Order::OrderType::Market)
+            {
+                Cancel cancel{order.order_id_};
+                message_hub_->SendCancel(cancel);
+            }
         }
     }
 
@@ -268,6 +277,13 @@ private:
 
             Fill(order, min, first_order.price_);
             Fill(first_order, min, first_order.price_);
+
+            if (first_order.quantity_ == first_order.cum_qty_)
+            {
+                other_side.erase(other_side.begin());
+            }
+
+            return min;
         }
 
         return 0;
