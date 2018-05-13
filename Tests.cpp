@@ -274,8 +274,82 @@ TEST_F(Tests, ShouldFillUpLimit)
     Engine.SubmitNewOrder(m2);
 }
 
-// ShouldFillUpLimit
-// ShouldPartiallyFillLimitThenAck
+TEST_F(Tests, ShouldPartiallyFillLimitThenAck)
+{
+    InSequence s;
+
+    Matching::Fill f;
+
+    Matching::Order l11{11, 130, 40, 0, Matching::Order::Side::Buy, Matching::Order::OrderType::Limit};
+    EXPECT_CALL(MessageHub, SendOrderAck(_)).Times(2);
+    Engine.SubmitNewOrder(l11);
+    Matching::Order l12{12, 130, 60, 0, Matching::Order::Side::Buy, Matching::Order::OrderType::Limit};
+    Engine.SubmitNewOrder(l12);
+
+    Matching::Order l13{13, 123, 110, 0, Matching::Order::Side::Sell, Matching::Order::OrderType::Limit};
+    f.order_id_ = 13;
+    f.quantity_ = 40;
+    f.price_ = 130;
+    EXPECT_CALL(MessageHub, SendFill(f));
+    f.order_id_ = 11;
+    EXPECT_CALL(MessageHub, SendFill(f));
+    f.order_id_ = 13;
+    f.quantity_ = 60;
+    f.price_ = 130;
+    EXPECT_CALL(MessageHub, SendFill(f));
+    f.order_id_ = 12;
+    EXPECT_CALL(MessageHub, SendFill(f));
+    Matching::OrderAck a1{13};
+    EXPECT_CALL(MessageHub, SendOrderAck(a1));
+    Engine.SubmitNewOrder(l13);
+
+    Matching::Order m1{3, 123, 90, 0, Matching::Order::Side::Buy, Matching::Order::OrderType::Market};
+    f.order_id_ = 3;
+    f.quantity_ = 10;
+    f.price_ = 123;
+    EXPECT_CALL(MessageHub, SendFill(f));
+    f.order_id_ = 13;
+    EXPECT_CALL(MessageHub, SendFill(f));
+    Matching::Cancel c1{3};
+    EXPECT_CALL(MessageHub, SendCancel(c1));
+    Engine.SubmitNewOrder(m1);
+
+
+    Matching::Order l21{21, 140, 40, 0, Matching::Order::Side::Sell, Matching::Order::OrderType::Limit};
+    EXPECT_CALL(MessageHub, SendOrderAck(_)).Times(2);
+    Engine.SubmitNewOrder(l21);
+    Matching::Order l22{22, 140, 60, 0, Matching::Order::Side::Sell, Matching::Order::OrderType::Limit};
+    Engine.SubmitNewOrder(l22);
+
+    Matching::Order l23{23, 140, 120, 0, Matching::Order::Side::Buy, Matching::Order::OrderType::Limit};
+    f.order_id_ = 23;
+    f.quantity_ = 40;
+    f.price_ = 140;
+    EXPECT_CALL(MessageHub, SendFill(f));
+    f.order_id_ = 21;
+    EXPECT_CALL(MessageHub, SendFill(f));
+    f.order_id_ = 23;
+    f.quantity_ = 60;
+    f.price_ = 140;
+    EXPECT_CALL(MessageHub, SendFill(f));
+    f.order_id_ = 22;
+    EXPECT_CALL(MessageHub, SendFill(f));
+    Matching::OrderAck a2{23};
+    EXPECT_CALL(MessageHub, SendOrderAck(a2));
+    Engine.SubmitNewOrder(l23);
+
+    Matching::Order m2{4, 123, 90, 0, Matching::Order::Side::Sell, Matching::Order::OrderType::Market};
+    f.order_id_ = 4;
+    f.quantity_ = 20;
+    f.price_ = 140;
+    EXPECT_CALL(MessageHub, SendFill(f));
+    f.order_id_ = 23;
+    EXPECT_CALL(MessageHub, SendFill(f));
+    Matching::Cancel c2{4};
+    EXPECT_CALL(MessageHub, SendCancel(c2));
+    Engine.SubmitNewOrder(m2);
+}
+
 // ShouldBeRemovedAfterFill
 // ShouldNotOverFillOrder
 // ShouldFillOnOrderOfAdding
