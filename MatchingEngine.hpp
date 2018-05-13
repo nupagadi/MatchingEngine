@@ -73,8 +73,6 @@
 #include <map>
 #include <functional>
 
-#include <boost/variant.hpp>
-
 namespace Matching
 {
 
@@ -172,18 +170,8 @@ struct MessageHub
 template <Order::Side TSide>
 using Better = std::conditional_t<TSide == Order::Side::Buy, std::greater<Order::TPrice>, std::less<Order::TPrice>>;
 
-template <typename TThisSide, typename TOtherSide>
-struct Templates
-{
-    TThisSide& This;
-    TOtherSide& Other;
-};
-
-
 class MatchingEngine
 {
-    MessageHub* message_hub_;
-
     // std::multimap keeps entries with the same key in order of their insertion.
     template <typename TBetter>
     using TMap = std::multimap<Order::TPrice, Order, TBetter>;
@@ -191,10 +179,20 @@ class MatchingEngine
     using TBids = TMap<Better<Order::Side::Buy>>;
     using TAcks = TMap<Better<Order::Side::Sell>>;
 
-    TBids bids_;
-    TAcks asks_;
+    template <typename TThisSide, typename TOtherSide>
+    struct Templates
+    {
+        TThisSide& This;
+        TOtherSide& Other;
+    };
+
+private:
 
     static const constexpr char* NotEnoughLiquidityMessage = "Not enough liquidity.";
+
+    MessageHub* message_hub_;
+    TBids bids_;
+    TAcks asks_;
 
 public:
 
@@ -269,11 +267,16 @@ private:
             return 0;
         }
 
+        if (order.quantity_ - order.cum_qty_ == 0)
+        {
+            return 0;
+        }
+
         auto& first_order = other_side.begin()->second;
         if (!typename T::key_compare()(order.price_, first_order.price_) && order.type_ == Order::OrderType::Limit
             || order.type_ == Order::OrderType::Market)
         {
-            auto min = std::min(order.quantity_, first_order.quantity_);
+            auto min = std::min(order.quantity_ - order.cum_qty_, first_order.quantity_ - first_order.cum_qty_);
 
             Fill(order, min, first_order.price_);
             Fill(first_order, min, first_order.price_);
