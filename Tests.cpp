@@ -350,10 +350,70 @@ TEST_F(Tests, ShouldPartiallyFillLimitThenAck)
     Engine.SubmitNewOrder(m2);
 }
 
-// ShouldBeRemovedAfterFill
-// ShouldNotOverFillOrder
-// ShouldFillOnOrderOfAdding
-// ShouldNotAddOrdersWithSameId
+TEST_F(Tests, ShouldNotAddOrdersWithSameId)
+{
+    Matching::Reject r{1, "Id already exists."};
+
+    Matching::Order o1{1, 123, 100, 0, Matching::Order::Side::Buy, Matching::Order::OrderType::Limit};
+    Matching::Order o2{1, 123, 100, 0, Matching::Order::Side::Sell, Matching::Order::OrderType::Limit};
+    Matching::Order o3{1, 123, 10, 0, Matching::Order::Side::Buy, Matching::Order::OrderType::Market};
+    Matching::Order o4{1, 123, 10, 0, Matching::Order::Side::Sell, Matching::Order::OrderType::Market};
+
+    EXPECT_CALL(MessageHub, SendOrderAck(_));
+    Engine.SubmitNewOrder(o1);
+    EXPECT_CALL(MessageHub, SendReject(r));
+    Engine.SubmitNewOrder(o2);
+    EXPECT_CALL(MessageHub, SendReject(r));
+    Engine.SubmitNewOrder(o3);
+    EXPECT_CALL(MessageHub, SendReject(r));
+    Engine.SubmitNewOrder(o4);
+}
+
+TEST_F(Tests, ShouldCancelOrder)
+{
+    Matching::Reject r{1, "Id not found."};
+
+    InSequence s;
+
+    Matching::Fill f;
+
+    Matching::Order l11{11, 130, 40, 0, Matching::Order::Side::Buy, Matching::Order::OrderType::Limit};
+    EXPECT_CALL(MessageHub, SendOrderAck(_)).Times(2);
+    Engine.SubmitNewOrder(l11);
+    Matching::Order l12{12, 130, 60, 0, Matching::Order::Side::Buy, Matching::Order::OrderType::Limit};
+    Engine.SubmitNewOrder(l12);
+
+    Matching::Cancel c1{11};
+    EXPECT_CALL(MessageHub, SendCancel(c1));
+    Matching::Order o1{11};
+    Engine.CancelExistingOrder(o1);
+    r.order_id_ = 11;
+    EXPECT_CALL(MessageHub, SendReject(r));
+    Engine.CancelExistingOrder(o1);
+
+    Matching::Order l13{13, 123, 110, 0, Matching::Order::Side::Sell, Matching::Order::OrderType::Limit};
+    f.order_id_ = 13;
+    f.quantity_ = 60;
+    f.price_ = 130;
+    EXPECT_CALL(MessageHub, SendFill(f));
+    f.order_id_ = 12;
+    EXPECT_CALL(MessageHub, SendFill(f));
+    Matching::OrderAck a1{13};
+    EXPECT_CALL(MessageHub, SendOrderAck(a1));
+    Engine.SubmitNewOrder(l13);
+
+    Matching::Order m1{3, 123, 90, 0, Matching::Order::Side::Buy, Matching::Order::OrderType::Market};
+    f.order_id_ = 3;
+    f.quantity_ = 50;
+    f.price_ = 123;
+    EXPECT_CALL(MessageHub, SendFill(f));
+    f.order_id_ = 13;
+    EXPECT_CALL(MessageHub, SendFill(f));
+    Matching::Cancel c2{3};
+    EXPECT_CALL(MessageHub, SendCancel(c2));
+    Engine.SubmitNewOrder(m1);
+}
+
 
 int main(int argc, char** argv)
 {

@@ -1,85 +1,29 @@
-// Your job is to implement a Matching Engine and the supporting classes to implement a simple exchange.
-// The matching engine is just for a single symbol, say "IBM", so there is no need to complicate it beyond that.
-// The Matching Engine should support Limit and Market orders being submitted, and Limit orders may also be cancelled
-// if they aren't already filled.  Market orders should be either immediately filled, cancelled, or partially filled
-// and the remainder cancelled.  They should never rest on the book.  Limit orders should fill any qty they can on
-// being submitted, and the remainder of the order should rest on the appropriate side of the book until another order
-// comes in that can trade with it.  The order book of resting orders should be maintained in price/time priority
-// similar to how most US exchanges work.  When a new order comes in that could possibly trade with multiple resting
-// orders, the order at the "best" price should be chosen, and if multiple orders are available at the best price, the
-// oldest order should be chosen.  If the new order is bigger in quantity than a resting order, it should continue to
-// fill additional resting orders until it is completely filled, or there are no additional resting orders on that side.
-// If it is not completely filled, the remaining qty should rest on the book at the order limit price.  Example:
-//
-// submit_new_order ( order id 1, quantity 100, price 50, side sell, type limit) -> results in
-//   Order Ack (order id 1, shares remaining 100)
-//
-// submit_new_order ( order id 2, quantity 100, price 50, side sell, type Market) -> results in
-//   Order Reject (order id 2) //reject because there are no sell orders for it to trade with, only buy orders
-//
-// submit_new_order ( order id 3, quantity 100, price 49, side sell, type limit) -> results in
-//   Order Ack (order id 3, shares remaining 100)
-//
-// submit_new_order ( order id 4, quantity 100, price 50, side sell, type limit) -> results in
-//   Order Ack (order id 4, shares remaining 100)
-//
-// submit_new_order ( order id 5, quantity 100, price 48, side buy, type limit) -> results in
-//   Order Ack (order id 5, shares remaining 100)
-//
-// The order book now looks something like this:
-//   Price Level:  Resting Order Ids:  Side:
-//     50:             1, 4            sell
-//     49:             3               sell
-//     48:             5               buy
-//
-// submit_new_order ( order id 6, quantity 200, price 51, side buy, type limit) -> results in
-//   Fill (order id 3, shares 100, price 49, side sell)
-//   Fill (order id 6, shares 100, price 49, side buy)
-//   Fill (order id 1, shares 100, price 50, side sell)
-//   Fill (order id 6, shares 100, price 50, side buy)
-//
-// The order book now looks something like this:
-//   Price Level:  Resting Order Ids:  Side:
-//     50:             4               sell
-//     48:             5               buy
-//
-// submit_new_order ( order id 7, quantity 200, price 51, side buy, type limit) -> results in
-//   Fill (order id 4, shares 100, price 50, side sell)
-//   Fill (order id 7, shares 100, price 50, side buy)
-//   Order Ack (order id 7, shares remaining 100)
-//
-// The order book now looks something like this:
-//   Price Level:  Resting Order Ids:    Side:
-//     51:             7 (100 remaining) buy
-//     48:             5                 buy
-//
-// cancel_existing_order ( order id 5 ) -> results in
-//   Cancel (order id 5)
-//
-// The order book now looks something like this:
-//   Price Level:  Resting Order Ids:    Side:
-//     51:             7 (100 remaining) buy
-//
-
-
-// This code has a few C++11 constructs, feel free to change to C++98 if needed.
-
-
-// Assume this class is constructed for you, you don't need to construct it
-// or manage its lifetime.
-
 #pragma once
 
 #include <map>
+#include <unordered_map>
 #include <functional>
 
 namespace Matching
 {
 
+// Assume that the order in which messages are delivered to users is guaranteed to be the same as their sending.
+// So, for example, there is no need to specify leaves quantity for partially filled market order (in Cancel)
+// as it can be determined from previously sent Fill orders.
+
+// Possibly, there should be distinct client order id and engine-side order id,
+// so different clients could have same ids of their orders.
+
+// There are two instructions, which seems to contradict each others:
+// 1. Market orders should be either immediately filled, cancelled, or partially filled and the remainder cancelled.
+// 2. Trade at any price available, reject order if it can't trade immediately.
+// This engine implemented in a way where market orders rejected when there is no any liquidity
+// or if there is, it is partially filled, then canceled.
+
 struct Order
 {
-    using TPrice = int64_t;
-    using TQty = uint32_t;
+    using TPrice =   int64_t;
+    using TQty =     uint32_t;
     using TOrderId = uint64_t;
 
     enum class Side : char
@@ -90,21 +34,17 @@ struct Order
 
     enum class OrderType : char
     {
-        Market,            // Trade at any price available, reject order if it can't trade immediately
-        Limit              // Trade at the specified price or better, rest order on book if it can't trade immediately
+        Market,
+        Limit
     };
 
-    TOrderId  order_id_;  // Some globally unique identifier for this order, where it comes from is not important
-    TPrice    price_;     // Some normalized price type, details aren't important
-    TQty      quantity_;  // Number of shares to buy or sell
+    TOrderId  order_id_;
+    TPrice    price_;
+    TQty      quantity_;
     TQty      cum_qty_;   // Number of shares already filled
-    Side      side_;      // Whether order is to buy or sell
-    OrderType type_;      // The order type, limit or market
+    Side      side_;
+    OrderType type_;
 };
-
-// Assume that the order in which messages are delivered to users is guaranteed to be the same as their sending.
-// So, for example, there is no need to specify leaves quantity for partially filled market order (in Cancel)
-// as it can be determined from previously sent Fill orders.
 
 struct Fill
 {
@@ -155,16 +95,13 @@ struct OrderAck
 
 struct MessageHub
 {
-    // You need to call these functions to notify the system of
-    // fills, rejects, cancels, and order acknowledgements
+    virtual void SendFill(Fill&) = 0;
 
-    virtual void SendFill(Fill&) = 0;     // Call twice per fill, once for each order that participated in the fill (i.e. the buy and sell orders).
+    virtual void SendReject(Reject&) = 0;
 
-    virtual void SendReject(Reject&) = 0; // Call when a 'market' order can't be filled immediately
+    virtual void SendCancel(Cancel&) = 0;
 
-    virtual void SendCancel(Cancel&) = 0; // Call when an order is successfully cancelled
-
-    virtual void SendOrderAck(OrderAck&) = 0;// Call when a 'limit' order doesn't trade immediately, but is placed into the book
+    virtual void SendOrderAck(OrderAck&) = 0;
 };
 
 template <Order::Side TSide>
@@ -182,17 +119,21 @@ class MatchingEngine
     template <typename TThisSide, typename TOtherSide>
     struct Templates
     {
-        TThisSide& This;
+        TThisSide&  This;
         TOtherSide& Other;
     };
 
 private:
 
-    static const constexpr char* NotEnoughLiquidityMessage = "Not enough liquidity.";
+    static const constexpr char* NotEnoughLiquidityMessage  = "Not enough liquidity.";
+    static const constexpr char* IdAlreadyExistsMessage     = "Id already exists.";
+    static const constexpr char* IdNotFoundMessage          = "Id not found.";
 
     MessageHub* message_hub_;
-    TBids bids_;
-    TAcks asks_;
+
+    TBids       bids_;
+    TAcks       asks_;
+    std::unordered_map<Order::TOrderId, TBids::iterator> ids_;
 
 public:
 
@@ -200,14 +141,16 @@ public:
         : message_hub_(message_hub)
     {}
 
-    // Implement these functions, and any other supporting functions or classes needed.
-    // You can assume these functions will be called by external code, and that they will be used
-    // properly, i.e the order objects are valid and filled out correctly.
-    // You should call the message_hub_ member to notify it of the various events that happen as a result
-    // of matching orders and entering orders into the order book.
-
     void SubmitNewOrder(Order& order)
     {
+        auto res = ids_.find(order.order_id_);
+        if (res != ids_.cend())
+        {
+            Reject r{order.order_id_, IdAlreadyExistsMessage};
+            message_hub_->SendReject(r);
+            return;
+        }
+
         order.cum_qty_ = 0;
 
         if (order.side_ == Order::Side::Buy)
@@ -225,7 +168,23 @@ public:
 
     void CancelExistingOrder(Order& order)
     {
+        auto res = ids_.find(order.order_id_);
+        if (res == ids_.cend())
+        {
+            Reject r{order.order_id_, IdNotFoundMessage};
+            message_hub_->SendReject(r);
+            return;
+        }
 
+        auto& order_to_cancel = res->second->second;
+        if (order_to_cancel.side_ == Order::Side::Buy)
+        {
+            bids_.erase(res->second);
+            ids_.erase(order.order_id_);
+
+            Cancel cancel{order.order_id_};
+            message_hub_->SendCancel(cancel);
+        }
     }
 
 private:
@@ -246,7 +205,9 @@ private:
         {
             if (order.type_ == Order::OrderType::Limit)
             {
-                templates.This.emplace(order.price_, order);
+                auto it = templates.This.emplace(order.price_, order);
+
+                ids_.emplace(order.order_id_, it);
 
                 OrderAck ack{order.order_id_};
                 message_hub_->SendOrderAck(ack);
@@ -284,6 +245,7 @@ private:
             if (first_order.quantity_ == first_order.cum_qty_)
             {
                 other_side.erase(other_side.begin());
+                ids_.erase(order.order_id_);
             }
 
             return min;
